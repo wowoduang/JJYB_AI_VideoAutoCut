@@ -1467,45 +1467,59 @@ def start_desktop_app():
                 else:
                     logger.warning('⚠️ 服务器启动超时')
 
-        # 尝试使用WebView
-        try:
-            import webview
+        # 检测是否为无图形界面环境（headless server）
+        _is_headless = (os.environ.get('DISPLAY') is None and os.environ.get('WAYLAND_DISPLAY') is None)
 
-            logger.info('🖥️  启动桌面窗口...')
+        # 尝试使用WebView（仅在有图形界面时）
+        if not _is_headless:
+            try:
+                import webview
 
-            # 创建窗口
-            webview.create_window(
-                title='JJYB_AI智剪 v2.0',
-                url=f'http://{UI_HOST}:{APP_PORT}',
-                width=1400,
-                height=900,
-                resizable=True,
-                fullscreen=False
-            )
+                logger.info('🖥️  启动桌面窗口...')
 
-            logger.info('✅ 桌面窗口创建成功')
+                # 创建窗口
+                webview.create_window(
+                    title='JJYB_AI智剪 v2.0',
+                    url=f'http://{UI_HOST}:{APP_PORT}',
+                    width=1400,
+                    height=900,
+                    resizable=True,
+                    fullscreen=False
+                )
 
-            # 启动应用
-            webview.start(debug=False)
+                logger.info('✅ 桌面窗口创建成功')
 
-        except ImportError:
-            logger.info('ℹ️ PyWebView未安装，使用浏览器模式')
+                # 启动应用
+                webview.start(debug=False)
+                return  # WebView 正常退出后直接返回
+
+            except ImportError:
+                logger.info('ℹ️ PyWebView未安装，回退到浏览器模式')
+            except Exception as e:
+                logger.warning(f'⚠️ 桌面窗口启动失败（{e}），回退到浏览器模式')
+
+        if _is_headless:
+            # 无图形界面的服务器环境，仅提示访问地址
+            logger.info('ℹ️ 检测到无图形界面环境（headless），跳过桌面窗口和浏览器')
+            logger.info(f'💡 请通过浏览器访问: http://{UI_HOST}:{APP_PORT}')
+        else:
+            # 有图形界面但 WebView 不可用，尝试打开浏览器
             logger.info('🌐 正在打开浏览器...')
-
-            # 使用默认浏览器打开
-            import webbrowser
-            webbrowser.open(f'http://{UI_HOST}:{APP_PORT}')
-
-            logger.info('✅ 浏览器已打开')
+            try:
+                import webbrowser
+                webbrowser.open(f'http://{UI_HOST}:{APP_PORT}')
+                logger.info('✅ 浏览器已打开')
+            except Exception:
+                pass
             logger.info(f'💡 访问地址: http://{UI_HOST}:{APP_PORT}')
 
-            # 保持运行
-            try:
-                logger.info('💡 按 Ctrl+C 退出程序')
-                while True:
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                logger.info('\n✅ 程序正常退出')
+        # 保持运行
+        try:
+            logger.info('💡 按 Ctrl+C 退出程序')
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info('\n✅ 程序正常退出')
 
     except Exception as e:
         logger.error(f'❗ 桌面应用启动失败: {e}', exc_info=True)
