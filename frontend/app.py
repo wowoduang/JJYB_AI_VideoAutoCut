@@ -142,12 +142,13 @@ def add_security_headers(response):
 
     # 放宽 CSP 以允许内联脚本和 CDN 资源
     csp_directives = [
-        "default-src 'self' 'unsafe-inline' 'unsafe-eval' *",
+        "default-src 'self' 'unsafe-inline' 'unsafe-eval' blob: *",
         "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdn.tailwindcss.com https://cdn.socket.io *",
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net *",
         "img-src 'self' data: blob: https: *",
         "font-src 'self' data: https://cdn.jsdelivr.net *",
         "connect-src 'self' ws: wss: https: *",
+        "media-src 'self' blob: data: https: *",
         "frame-src 'self' *"
     ]
     response.headers['Content-Security-Policy'] = '; '.join(csp_directives)
