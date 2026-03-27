@@ -61,6 +61,7 @@ try:
     logger_msg = '✅ 后端模块可用，将使用增强功能'
 except ImportError as e:
     BACKEND_AVAILABLE = False
+    logger_msg = f'⚠️  后端模块不可用，使用内置功能: {e}'
 # 读取全局配置 config/config.yaml（支持环境变量覆盖）
 APP_CFG = {}
 try:
@@ -94,7 +95,6 @@ try:
     LOG_BACKUP = int(LOG_CFG.get('backup_count', 5))
 except Exception:
     LOG_BACKUP = 5
-    logger_msg = f'⚠️  后端模块不可用，使用内置功能: {e}'
 
 # 配置日志（读取自 config/config.yaml，可用环境变量覆盖）
 LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1537,7 +1537,18 @@ def load_api_config_data():
 
 if not BACKEND_AVAILABLE:
     # 0. 文件上传回退路由（后端模块不可用时）
-    from backend.api.upload_routes import ALLOWED_VIDEO_EXTENSIONS, ALLOWED_AUDIO_EXTENSIONS, ALLOWED_IMAGE_EXTENSIONS, allowed_file
+    try:
+        from backend.api.upload_routes import ALLOWED_VIDEO_EXTENSIONS, ALLOWED_AUDIO_EXTENSIONS, ALLOWED_IMAGE_EXTENSIONS, allowed_file
+    except ImportError:
+        # backend.api 包的 __init__.py 会间接导入 cv2 等重型依赖，
+        # 当这些依赖不存在时需要内联定义上传所需的常量和工具函数。
+        ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'flv', 'wmv'}
+        ALLOWED_AUDIO_EXTENSIONS = {'mp3', 'wav', 'aac', 'm4a', 'flac'}
+        ALLOWED_IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'}
+
+        def allowed_file(filename, allowed_extensions):
+            """检查文件扩展名是否允许"""
+            return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_extensions
 
     @app.route('/api/upload/video', methods=['POST'])
     def fallback_upload_video():
@@ -2515,17 +2526,6 @@ if not BACKEND_AVAILABLE:
                 clips.append({'start': round(s, 2), 'duration': round(d, 2)})
 
             return jsonify({'code': 0, 'data': {'clips': clips, 'total': len(clips)}})
-        except Exception as e:
-            logger.error(f'智能剪辑失败: {e}', exc_info=True)
-            return jsonify({'code': 1, 'msg': str(e)}), 500
-
-        try:
-            payload = request.get_json() or {}
-            project_id = payload.get('project_id')
-            if not project_id:
-                return jsonify({'code': 1, 'msg': '缺少项目ID'}), 400
-
-            return jsonify({'code': 1, 'msg': '未配置真实智能剪辑服务。请在设置中配置视频分析/场景检测后再试'}), 400
         except Exception as e:
             logger.error(f'智能剪辑失败: {e}', exc_info=True)
             return jsonify({'code': 1, 'msg': str(e)}), 500
