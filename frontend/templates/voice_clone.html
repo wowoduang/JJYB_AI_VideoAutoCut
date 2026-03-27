@@ -149,7 +149,12 @@
                     method: 'POST',
                     body: formData
                 })
-                .then(res => res.json())
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error(res.status === 413 ? '音频文件过大，请压缩后重试' : `服务器错误 (${res.status})`);
+                    }
+                    return res.json();
+                })
                 .then(data => {
                     if (progressFill) {
                         progressFill.style.width = '100%';

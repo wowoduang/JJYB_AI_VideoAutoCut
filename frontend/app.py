@@ -159,8 +159,9 @@ socketio = SocketIO(
     app,
     cors_allowed_origins="*",
     async_mode='threading',
-    ping_timeout=60,
-    ping_interval=25
+    ping_timeout=120,
+    ping_interval=25,
+    max_http_buffer_size=5 * 1024 * 1024 * 1024  # 5GB，与 MAX_CONTENT_LENGTH 保持一致
 )
 
 # 确保必要的目录存在
@@ -1526,6 +1527,106 @@ def load_api_config_data():
         return {}
 
 if not BACKEND_AVAILABLE:
+    # 0. 文件上传回退路由（后端模块不可用时）
+    from backend.api.upload_routes import ALLOWED_VIDEO_EXTENSIONS, ALLOWED_AUDIO_EXTENSIONS, ALLOWED_IMAGE_EXTENSIONS, allowed_file
+
+    @app.route('/api/upload/video', methods=['POST'])
+    def fallback_upload_video():
+        """上传视频文件（回退路由）"""
+        try:
+            if 'video' not in request.files:
+                return jsonify({'code': 1, 'msg': '没有文件', 'data': None}), 400
+            file = request.files['video']
+            if file.filename == '':
+                return jsonify({'code': 1, 'msg': '文件名为空', 'data': None}), 400
+            if not allowed_file(file.filename, ALLOWED_VIDEO_EXTENSIONS):
+                return jsonify({'code': 1, 'msg': '不支持的文件格式', 'data': None}), 400
+
+            filename = secure_filename(file.filename)
+            timestamp = int(time.time())
+            name, ext = os.path.splitext(filename)
+            new_filename = f"{name}_{timestamp}{ext}"
+
+            scene = (request.form.get('scene') or '').strip().lower()
+            if scene == 'commentary':
+                subdir = 'commentary_videos'
+            elif scene == 'remix':
+                subdir = 'remix_videos'
+            else:
+                subdir = 'videos'
+
+            save_dir = os.path.join('uploads', subdir)
+            os.makedirs(save_dir, exist_ok=True)
+
+            filepath = os.path.join('uploads', subdir, new_filename)
+            file.save(filepath)
+            file_size = os.path.getsize(filepath)
+            logger.info(f'✅ 视频上传成功（回退路由）: {filepath}')
+            return jsonify({'code': 0, 'msg': '上传成功', 'data': {'path': filepath, 'filename': new_filename, 'size': file_size}})
+        except Exception as e:
+            logger.error(f'❌ 视频上传失败: {e}')
+            return jsonify({'code': 1, 'msg': f'上传失败: {str(e)}', 'data': None}), 500
+
+    @app.route('/api/upload/audio', methods=['POST'])
+    def fallback_upload_audio():
+        """上传音频文件（回退路由）"""
+        try:
+            if 'audio' not in request.files:
+                return jsonify({'code': 1, 'msg': '没有文件', 'data': None}), 400
+            file = request.files['audio']
+            if file.filename == '':
+                return jsonify({'code': 1, 'msg': '文件名为空', 'data': None}), 400
+            if not allowed_file(file.filename, ALLOWED_AUDIO_EXTENSIONS):
+                return jsonify({'code': 1, 'msg': '不支持的文件格式', 'data': None}), 400
+
+            filename = secure_filename(file.filename)
+            timestamp = int(time.time())
+            name, ext = os.path.splitext(filename)
+            new_filename = f"{name}_{timestamp}{ext}"
+
+            save_dir = os.path.join('uploads', 'audios')
+            os.makedirs(save_dir, exist_ok=True)
+
+            filepath = os.path.join('uploads', 'audios', new_filename)
+            file.save(filepath)
+            file_size = os.path.getsize(filepath)
+            logger.info(f'✅ 音频上传成功（回退路由）: {filepath}')
+            return jsonify({'code': 0, 'msg': '上传成功', 'data': {'path': filepath, 'filename': new_filename, 'size': file_size}})
+        except Exception as e:
+            logger.error(f'❌ 音频上传失败: {e}')
+            return jsonify({'code': 1, 'msg': f'上传失败: {str(e)}', 'data': None}), 500
+
+    @app.route('/api/upload/image', methods=['POST'])
+    def fallback_upload_image():
+        """上传图片文件（回退路由）"""
+        try:
+            if 'image' not in request.files:
+                return jsonify({'code': 1, 'msg': '没有文件', 'data': None}), 400
+            file = request.files['image']
+            if file.filename == '':
+                return jsonify({'code': 1, 'msg': '文件名为空', 'data': None}), 400
+            if not allowed_file(file.filename, ALLOWED_IMAGE_EXTENSIONS):
+                return jsonify({'code': 1, 'msg': '不支持的文件格式', 'data': None}), 400
+
+            filename = secure_filename(file.filename)
+            timestamp = int(time.time())
+            name, ext = os.path.splitext(filename)
+            new_filename = f"{name}_{timestamp}{ext}"
+
+            save_dir = os.path.join('uploads', 'images')
+            os.makedirs(save_dir, exist_ok=True)
+
+            filepath = os.path.join('uploads', 'images', new_filename)
+            file.save(filepath)
+            file_size = os.path.getsize(filepath)
+            logger.info(f'✅ 图片上传成功（回退路由）: {filepath}')
+            return jsonify({'code': 0, 'msg': '上传成功', 'data': {'path': filepath, 'filename': new_filename, 'size': file_size}})
+        except Exception as e:
+            logger.error(f'❌ 图片上传失败: {e}')
+            return jsonify({'code': 1, 'msg': f'上传失败: {str(e)}', 'data': None}), 500
+
+    logger.info('✅ 文件上传回退路由注册完成')
+
     # 1. 原创解说相关API
     @app.route('/api/commentary/analyze', methods=['POST'])
     def commentary_analyze():

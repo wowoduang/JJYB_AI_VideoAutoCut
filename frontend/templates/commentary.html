@@ -2481,7 +2481,12 @@
                 method: 'POST',
                 body: formData
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(response.status === 413 ? '文件过大，请压缩后重试' : `服务器错误 (${response.status})`);
+                }
+                return response.json();
+            })
             .then(data => {
                 layer.closeAll();
                 if (data.code === 0) {
@@ -3689,10 +3694,15 @@
                                 body: formData
                             });
 
+                            if (!uploadResult.ok) {
+                                const statusText = uploadResult.status === 413 ? '视频文件过大，请压缩后重试' : `服务器错误 (${uploadResult.status})`;
+                                throw new Error(statusText);
+                            }
+
                             const uploadData = await uploadResult.json();
 
                             if (uploadData.code !== 0) {
-                                throw new Error('视频上传失败');
+                                throw new Error(uploadData.msg || '视频上传失败');
                             }
 
                             videoPath = uploadData.data.path;
@@ -3960,10 +3970,15 @@
                             method: 'POST',
                             body: formData
                         });
-                        
+
+                        if (!uploadResult.ok) {
+                            const statusText = uploadResult.status === 413 ? '视频文件过大，请压缩后重试' : `服务器错误 (${uploadResult.status})`;
+                            throw new Error(statusText);
+                        }
+
                         const uploadData = await uploadResult.json();
                         if (uploadData.code !== 0) {
-                            throw new Error('视频上传失败');
+                            throw new Error(uploadData.msg || '视频上传失败');
                         }
                         
                         videoPath = uploadData.data.path;
