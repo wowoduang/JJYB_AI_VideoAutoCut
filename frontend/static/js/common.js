@@ -45,26 +45,39 @@ class SocketManager {
     init() {
         try {
             if (typeof io !== 'undefined') {
-                this.socket = io(APP_CONFIG.socketUrl);
+                this.socket = io(APP_CONFIG.socketUrl, {
+                    reconnectionAttempts: 5,
+                    reconnectionDelay: 2000,
+                    reconnectionDelayMax: 10000,
+                    timeout: 10000
+                });
                 
                 this.socket.on('connect', () => {
                     this.connected = true;
-                    console.log('✅ Socket.IO 连接成功');
+                    console.log('Socket.IO 连接成功');
                 });
 
                 this.socket.on('disconnect', () => {
                     this.connected = false;
-                    console.log('⚠️ Socket.IO 连接断开');
+                    console.log('Socket.IO 连接断开');
+                });
+
+                this.socket.on('connect_error', (error) => {
+                    console.warn('Socket.IO 连接失败，将自动重试:', error.message || error);
                 });
 
                 this.socket.on('error', (error) => {
-                    console.error('❌ Socket.IO 错误:', error);
+                    console.error('Socket.IO 错误:', error);
+                });
+
+                this.socket.io.on('reconnect_failed', () => {
+                    console.warn('Socket.IO 重连已达最大次数，停止重试。实时通知功能不可用，但不影响正常使用。');
                 });
             } else {
-                console.warn('⚠️ Socket.IO 未加载');
+                console.warn('Socket.IO 未加载，实时通知功能不可用');
             }
         } catch (error) {
-            console.error('❌ Socket.IO 初始化失败:', error);
+            console.error('Socket.IO 初始化失败:', error);
         }
     }
 

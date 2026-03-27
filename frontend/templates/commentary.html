@@ -1979,6 +1979,35 @@
         let selectedVisionModel = 'qwen-vl'; // 默认选择通义千问VL
 
         /**
+         * 安全的 fetch + JSON 解析，防止代理/服务器返回 HTML/XML 时抛出 SyntaxError
+         * @param {string} url - 请求URL
+         * @param {object} options - fetch 选项
+         * @returns {Promise<object>} 解析后的JSON对象，失败时返回 {code: -1, msg: '...'}
+         */
+        async function safeFetchJson(url, options) {
+            const response = await fetch(url, options);
+            const contentType = response.headers.get('content-type') || '';
+            if (!response.ok) {
+                if (contentType.includes('application/json')) {
+                    try { return await response.json(); } catch (_) {}
+                }
+                const statusMessages = {
+                    400: '请求参数错误 (400)',
+                    404: '接口不存在 (404)',
+                    500: '服务器内部错误 (500)',
+                    502: '网关错误，后端服务可能未启动 (502)',
+                    503: '服务暂时不可用 (503)',
+                    504: '请求超时 (504)'
+                };
+                return { code: -1, msg: statusMessages[response.status] || `服务器错误 (${response.status})`, data: null };
+            }
+            if (!contentType.includes('application/json')) {
+                return { code: -1, msg: '服务器返回了非 JSON 格式的响应，请检查服务器或代理配置', data: null };
+            }
+            return await response.json();
+        }
+
+        /**
          * 轮询异步任务结果
          * @param {string} taskId - 任务ID
          * @param {function} onProgress - 进度回调 (progress: number) => void
@@ -2029,10 +2058,10 @@
             container.innerHTML = '<div style="text-align:center;padding:12px 0;font-size:12px;color:#6b7280;">加载中...</div>';
 
             try {
-                const res = await fetch('/api/projects?type=commentary&limit=5&sort=updated_at&order=desc', {
+                const res = await safeFetchJson('/api/projects?type=commentary&limit=5&sort=updated_at&order=desc', {
                     method: 'GET',
                     headers: { 'Content-Type': 'application/json' }
-                }).then(r => r.json());
+                });
 
                 if (!res || res.code !== 0 || !res.data || !Array.isArray(res.data.projects)) {
                     throw new Error((res && res.msg) || '加载失败');
@@ -2416,11 +2445,11 @@
                         max_total_seconds: 60
                     };
 
-                    const res = await fetch('/api/voice-clone/tts-generate', {
+                    const res = await safeFetchJson('/api/voice-clone/tts-generate', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
-                    }).then(r => r.json());
+                    });
 
                     if (res && res.code === 0 && res.data) {
                         audioUrl = res.data.audio_url || res.data.audio_path;
@@ -2564,8 +2593,7 @@
                 return;
             }
             try {
-                const resp = await fetch('/api/subtitle/styles');
-                const data = await resp.json();
+                const data = await safeFetchJson('/api/subtitle/styles');
                 if (!data || data.code !== 0 || !data.data || !Array.isArray(data.data.styles)) {
                     return;
                 }
@@ -3326,11 +3354,11 @@
                 let resp = null;
                 let matResp = null;
                 try {
-                    resp = await fetch('/api/projects?type=commentary&order=desc&sort=created_at&limit=50').then(r => r.json());
+                    resp = await safeFetchJson('/api/projects?type=commentary&order=desc&sort=created_at&limit=50');
                 } catch (e) {}
                 try {
                     // 统一走素材文件扫描接口，type=video 仅保留视频
-                    matResp = await fetch('/api/materials/list?type=video&page=1&per_page=100').then(r => r.json());
+                    matResp = await safeFetchJson('/api/materials/list?type=video&page=1&per_page=100');
                 } catch (e) {}
                 layer.close(loading);
 
@@ -4052,19 +4080,12 @@
                         // 标记业务场景为原创解说，统一落盘到 uploads/commentary_videos
                         formData.append('scene', 'commentary');
 
-                        const uploadResult = await fetch('/api/upload/video', {
+                        const uploadData = await safeFetchJson('/api/upload/video', {
                             method: 'POST',
                             body: formData
                         });
-
-                        if (!uploadResult.ok) {
-                            const statusText = uploadResult.status === 413 ? '视频文件过大，请压缩后重试' : `服务器错误 (${uploadResult.status})`;
-                            throw new Error(statusText);
-                        }
-
-                        const uploadData = await uploadResult.json();
-                        if (uploadData.code !== 0) {
-                            throw new Error(uploadData.msg || '视频上传失败');
+                        if (!uploadData || uploadData.code !== 0) {
+                            throw new Error((uploadData && uploadData.msg) || '视频上传失败');
                         }
                         
                         videoPath = uploadData.data.path;
@@ -4216,7 +4237,7 @@
 
             if (!finalPath && currentProjectId) {
                 try {
-                    const res = await fetch(`/api/commentary/result/${currentProjectId}`).then(r => r.json());
+                    const res = await safeFetchJson(`/api/commentary/result/${currentProjectId}`);
                     if (res && res.code === 0 && res.data && res.data.result) {
                         finalPath = res.data.result.output_path || res.data.result.outputPath || null;
                     }
@@ -4396,7 +4417,7 @@
             const ageDays = getCleanupAgeDays();
             const body = {target, include: includes, dry_run: !!dryRun};
             if (ageDays) body.max_age_days = ageDays;
-            return fetch('/api/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+            return safeFetchJson('/api/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         }
         async function previewCleanup(){
             const includes = gatherIncludes();
