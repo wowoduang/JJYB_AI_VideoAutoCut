@@ -1978,6 +1978,36 @@
         let selectedLLM = 'openai'; // 默认选择OpenAI
         let selectedVisionModel = 'qwen-vl'; // 默认选择通义千问VL
 
+        /**
+         * 轮询异步任务结果
+         * @param {string} taskId - 任务ID
+         * @param {function} onProgress - 进度回调 (progress: number) => void
+         * @param {number} intervalMs - 轮询间隔（毫秒），默认2000
+         * @param {number} maxWaitMs - 最大等待时间（毫秒），默认600000（10分钟）
+         * @returns {Promise<object>} 任务结果数据
+         */
+        async function pollTaskResult(taskId, onProgress, intervalMs = 2000, maxWaitMs = 600000) {
+            const startTime = Date.now();
+            while (true) {
+                if (Date.now() - startTime > maxWaitMs) {
+                    throw new Error('任务超时，请稍后在任务列表中查看结果');
+                }
+                await new Promise(resolve => setTimeout(resolve, intervalMs));
+
+                const result = await API.get(`/api/commentary/task-result/${taskId}`);
+
+                if (result.status === 'completed' && result.code === 0) {
+                    return result.data;
+                } else if (result.status === 'failed' || result.code !== 0) {
+                    throw new Error(result.msg || '任务失败');
+                }
+                // status === 'running' 继续轮询
+                if (result.data && typeof result.data.progress === 'number' && onProgress) {
+                    onProgress(result.data.progress);
+                }
+            }
+        }
+
         function formatTimeAgoForCommentary(dateString) {
             if (!dateString) return '未知时间';
             const now = new Date();
@@ -3695,11 +3725,23 @@
                             });
 
                             if (!uploadResult.ok) {
-                                const statusText = uploadResult.status === 413 ? '视频文件过大，请压缩后重试' : `服务器错误 (${uploadResult.status})`;
-                                throw new Error(statusText);
+                                const statusMessages = {
+                                    504: '视频上传超时，文件可能过大或网络不稳定，请压缩后重试或检查代理超时设置。',
+                                    413: '视频文件过大，请压缩后重试。',
+                                    502: '网关错误，后端服务可能未启动。',
+                                    500: '服务器内部错误，请查看后端日志。'
+                                };
+                                throw new Error(statusMessages[uploadResult.status] || `服务器错误 (${uploadResult.status})`);
                             }
 
-                            const uploadData = await uploadResult.json();
+                            // 安全解析JSON，防止代理返回HTML
+                            let uploadData;
+                            const uploadContentType = uploadResult.headers.get('content-type') || '';
+                            if (uploadContentType.includes('application/json')) {
+                                uploadData = await uploadResult.json();
+                            } else {
+                                throw new Error('视频上传响应格式异常，请检查代理或服务器配置。');
+                            }
 
                             if (uploadData.code !== 0) {
                                 throw new Error(uploadData.msg || '视频上传失败');
@@ -3726,7 +3768,7 @@
                             Notification.info('♻️ 已选择复用已有视频素材，本次将直接基于该视频进行分析');
                         }
 
-                        // 第一步续：分析视频特征
+                        // 第一步续：分析视频特征（异步轮询模式）
                         const analyzeResult = await API.post('/api/commentary/analyze', {
                             video_path: videoPath,
                             scene_accuracy: config.sceneAccuracy,
@@ -3734,11 +3776,31 @@
                         });
 
                         if (analyzeResult.code !== 0) {
-                            throw new Error('视频分析失败');
+                            throw new Error(analyzeResult.msg || '视频分析失败');
                         }
 
-                        // 兼容增强后端(data字段)与本地模拟(results字段)
-                        visionResults = analyzeResult.data || analyzeResult.results;
+                        // 判断是否为异步模式（增强后端返回 task_id）
+                        if (analyzeResult.data && analyzeResult.data.async && analyzeResult.data.task_id) {
+                            const analyzeTaskId = analyzeResult.data.task_id;
+                            if (pgFill && pgText) {
+                                pgFill.style.width = '35%';
+                                pgFill.textContent = '35%';
+                                pgText.textContent = '视频分析任务已提交，正在后台处理中...';
+                            }
+                            // 轮询等待分析完成
+                            const analyzeData = await pollTaskResult(analyzeTaskId, (progress) => {
+                                if (pgFill && pgText) {
+                                    const pct = Math.min(55, 35 + Math.floor(progress * 0.2));
+                                    pgFill.style.width = pct + '%';
+                                    pgFill.textContent = pct + '%';
+                                    pgText.textContent = `视频分析中 (${progress}%)...`;
+                                }
+                            });
+                            visionResults = analyzeData;
+                        } else {
+                            // 兼容同步模式（fallback后端直接返回结果）
+                            visionResults = analyzeResult.data || analyzeResult.results;
+                        }
                         if (!visionResults) {
                             throw new Error('视频分析结果为空');
                         }
@@ -3773,7 +3835,7 @@
                     Notification.info(`✍️ 第二步：正在生成${config.scriptStyle}风格的原创文案...`);
                     Notification.info(`💫 情感基调：${config.emotionTone} | 文案结构：${config.scriptStructure}`);
                     
-                    const scriptResult = await API.post('/api/commentary/generate-script', {
+                    const scriptSubmitResult = await API.post('/api/commentary/generate-script', {
                         vision_results: visionResults,
                         llm_model: config.llm,
                         config: {
@@ -3788,6 +3850,30 @@
                             target_duration_seconds: targetDurationSeconds
                         }
                     });
+
+                    // 处理异步/同步两种返回模式
+                    let scriptResult;
+                    if (scriptSubmitResult.code === 0 && scriptSubmitResult.data && scriptSubmitResult.data.async && scriptSubmitResult.data.task_id) {
+                        // 异步模式：轮询等待结果
+                        const scriptTaskId = scriptSubmitResult.data.task_id;
+                        if (pgFill && pgText) {
+                            pgFill.style.width = '65%';
+                            pgFill.textContent = '65%';
+                            pgText.textContent = '文案生成任务已提交，正在后台处理中...';
+                        }
+                        const scriptData = await pollTaskResult(scriptTaskId, (progress) => {
+                            if (pgFill && pgText) {
+                                const pct = Math.min(95, 65 + Math.floor(progress * 0.3));
+                                pgFill.style.width = pct + '%';
+                                pgFill.textContent = pct + '%';
+                                pgText.textContent = `文案生成中 (${progress}%)...`;
+                            }
+                        });
+                        scriptResult = { code: 0, data: scriptData };
+                    } else {
+                        // 同步模式（fallback后端直接返回）
+                        scriptResult = scriptSubmitResult;
+                    }
 
                     if (scriptResult.code === 0) {
                         // 显示生成的文案
