@@ -2359,7 +2359,12 @@
                     method: 'POST',
                     body: formData
                 })
-                .then(res => res.json())
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error(res.status === 413 ? '音频文件过大，请压缩后重试' : `服务器错误 (${res.status})`);
+                    }
+                    return res.json();
+                })
                 .then(data => {
                     if (data && data.code === 0 && data.data && data.data.path) {
                         selectedBGM = data.data.path;
@@ -3108,9 +3113,13 @@
                             method: 'POST',
                             body: fd
                         });
+                        if (!uploadRes.ok) {
+                            const statusText = uploadRes.status === 413 ? '视频文件过大，请压缩后重试' : `服务器错误 (${uploadRes.status})`;
+                            throw new Error(statusText);
+                        }
                         const uploadJson = await uploadRes.json();
                         if (!uploadJson || uploadJson.code !== 0 || !uploadJson.data || !uploadJson.data.path) {
-                            throw new Error('视频上传失败，请检查网络或文件格式');
+                            throw new Error(uploadJson && uploadJson.msg ? uploadJson.msg : '视频上传失败，请检查网络或文件格式');
                         }
                         const serverPath = uploadJson.data.path;
                         // 记录到 File 对象上，便于后续复用
