@@ -25,7 +25,7 @@ step()  { echo -e "\n${CYAN}===== $* =====${NC}"; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/venv"
 PYTHON_CMD=""
-PIP_MIRROR="https://mirrors.aliyun.com/pypi/simple/"
+PIP_MIRROR="${PIP_MIRROR:-https://mirrors.aliyun.com/pypi/simple/}"
 APP_PORT="${APP_PORT:-5000}"
 APP_HOST="${APP_HOST:-0.0.0.0}"
 INSTALL_MODE="${1:-full}"   # full | basic | run
@@ -116,8 +116,11 @@ install_python() {
             else
                 sudo yum install -y python3 python3-devel python3-pip
             fi
-            PYTHON_CMD="python3.10"
-            [ ! command -v python3.10 >/dev/null 2>&1 ] && PYTHON_CMD="python3"
+            if command -v python3.10 >/dev/null 2>&1; then
+                PYTHON_CMD="python3.10"
+            else
+                PYTHON_CMD="python3"
+            fi
             ;;
         macos)
             if command -v brew >/dev/null 2>&1; then
@@ -286,6 +289,10 @@ install_python_deps() {
 
         # 安装其余依赖
         info "安装其他依赖..."
+        if [ ! -f "$SCRIPT_DIR/requirements.txt" ]; then
+            warn "requirements.txt 不存在，跳过依赖安装"
+            return 0
+        fi
         pip install -q -i "$PIP_MIRROR" -r "$SCRIPT_DIR/requirements.txt" \
             2>/dev/null || {
                 warn "部分包通过镜像安装失败，尝试默认源..."
@@ -394,7 +401,11 @@ run_check() {
 
     source "$VENV_DIR/bin/activate"
     cd "$SCRIPT_DIR"
-    python check_system.py 2>/dev/null || warn "系统检查脚本运行失败（不影响启动）"
+    if [ -f "$SCRIPT_DIR/check_system.py" ]; then
+        python check_system.py 2>/dev/null || warn "系统检查脚本运行失败（不影响启动）"
+    else
+        warn "check_system.py 不存在，跳过系统检查"
+    fi
 }
 
 # -------------------- 生成 systemd 服务文件 --------------------
