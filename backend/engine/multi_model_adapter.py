@@ -175,9 +175,45 @@ class WenxinAdapter(BaseModelAdapter):
             raise
     
     def analyze_image(self, image_path: str, prompt: str, **kwargs) -> str:
-        """分析图像"""
-        # 文心一言的图像分析功能
-        raise NotImplementedError("文心一言图像分析功能待实现")
+        """分析图像 - 使用百度文心一言图像理解API"""
+        if not self.access_token:
+            raise Exception("文心一言access token未获取")
+
+        try:
+            import base64
+            import requests
+
+            with open(image_path, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
+
+            url = f"https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions?access_token={self.access_token}"
+
+            payload = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": image_data},
+                            {"type": "text", "text": prompt}
+                        ]
+                    }
+                ],
+                **kwargs
+            }
+
+            response = requests.post(url, json=payload)
+
+            if response.status_code == 200:
+                result = response.json()
+                if 'error_code' in result:
+                    raise Exception(f"API错误 {result['error_code']}: {result.get('error_msg', '未知错误')}")
+                return result.get('result', '')
+            else:
+                raise Exception(f"API调用失败: {response.text}")
+
+        except Exception as e:
+            self.logger.error(f"❌ 文心一言图像分析失败: {e}")
+            raise
 
 
 class ChatGLMAdapter(BaseModelAdapter):
