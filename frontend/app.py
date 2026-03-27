@@ -1706,6 +1706,16 @@ if not BACKEND_AVAILABLE:
             logger.error(f'创建项目失败: {e}')
             return jsonify({'code': -1, 'msg': str(e)})
 
+    @app.route('/api/commentary/task-result/<task_id>', methods=['GET'])
+    def commentary_task_result(task_id):
+        """查询异步任务结果（回退路由 - 后端不可用时直接返回失败）"""
+        return jsonify({
+            'code': 1,
+            'msg': '后端增强模块未启用，异步任务功能不可用。',
+            'data': None,
+            'status': 'failed'
+        })
+
     @app.route('/api/commentary/process', methods=['POST'])
     def commentary_process():
         """处理原创解说项目"""

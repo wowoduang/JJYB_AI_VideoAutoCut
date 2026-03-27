@@ -3,12 +3,16 @@
 """
 
 import logging
+import threading
 from flask import Blueprint, request, jsonify
 import os
 import uuid
 import json
 
 logger = logging.getLogger('JJYB_AI智剪')
+
+# 内存缓存：存储异步任务的结果，key=task_id
+_async_task_results = {}
 
 
 def register_commentary_routes_enhanced(app, db_manager, task_service, socketio):
@@ -31,9 +35,44 @@ def register_commentary_routes_enhanced(app, db_manager, task_service, socketio)
             logger.error(f'❌ 创建项目失败: {e}')
             return jsonify({'code': 1, 'msg': str(e), 'data': None}), 500
     
+    def _run_analyze_in_background(task_id, video_path_abs, commentary_svc, db_mgr):
+        """在后台线程中执行视频分析"""
+        try:
+            db_mgr.update_task_status(task_id, 'running')
+            results = commentary_svc._analyze_video(video_path_abs, task_id)
+
+            if results:
+                # 移除不可序列化字段（如关键帧中的图像ndarray）并做JSON安全化
+                try:
+                    if isinstance(results.get('keyframes'), list):
+                        for kf in results['keyframes']:
+                            if isinstance(kf, dict) and 'image' in kf:
+                                kf['image'] = None
+                except Exception:
+                    pass
+                try:
+                    safe_data = json.loads(json.dumps(results, ensure_ascii=False, default=lambda o: None))
+                except Exception:
+                    safe_data = {'scenes': results.get('scenes'), 'descriptions': results.get('descriptions'), 'summary': results.get('summary')}
+
+                _async_task_results[task_id] = safe_data
+                db_mgr.update_task_status(task_id, 'completed', output_data=safe_data)
+                logger.info(f'✅ 异步视频分析完成: task_id={task_id}')
+            else:
+                _async_task_results[task_id] = {'__error': '分析失败'}
+                db_mgr.update_task_status(task_id, 'failed', error_message='视频分析返回空结果')
+                logger.error(f'❌ 异步视频分析失败: task_id={task_id}')
+        except Exception as e:
+            logger.error(f'❌ 异步视频分析异常: {e}')
+            _async_task_results[task_id] = {'__error': str(e)}
+            try:
+                db_mgr.update_task_status(task_id, 'failed', error_message=str(e))
+            except Exception:
+                pass
+
     @app.route('/api/commentary/analyze', methods=['POST'])
     def analyze_video():
-        """分析视频画面"""
+        """分析视频画面（异步）"""
         try:
             data = request.get_json()
             video_path = data.get('video_path')
@@ -49,7 +88,7 @@ def register_commentary_routes_enhanced(app, db_manager, task_service, socketio)
             if not os.path.exists(video_path_abs):
                 return jsonify({'code': 1, 'msg': '视频文件不存在', 'data': None}), 400
             
-            # 创建临时任务（写入数据库，保持与原逻辑兼容）
+            # 创建任务
             task_id = str(uuid.uuid4())
             db_manager.create_task(
                 task_id=task_id,
@@ -57,36 +96,54 @@ def register_commentary_routes_enhanced(app, db_manager, task_service, socketio)
                 project_id='temp',
                 input_data={'description': '视频画面分析', 'video_path': video_path_abs}
             )
-            task = {'id': task_id}
-            
-            # 执行分析
-            results = commentary_service._analyze_video(video_path_abs, task['id'])
-            
-            if results:
-                # 移除不可序列化字段（如关键帧中的图像ndarray）并做JSON安全化
-                try:
-                    if isinstance(results.get('keyframes'), list):
-                        for kf in results['keyframes']:
-                            if isinstance(kf, dict) and 'image' in kf:
-                                kf['image'] = None
-                except Exception:
-                    pass
-                try:
-                    safe_data = json.loads(json.dumps(results, ensure_ascii=False, default=lambda o: None))
-                except Exception:
-                    # 兜底：直接不带关键帧图像字段
-                    safe_data = {'scenes': results.get('scenes'), 'descriptions': results.get('descriptions'), 'summary': results.get('summary')}
-                return jsonify({'code': 0, 'msg': '分析完成', 'data': safe_data})
-            else:
-                return jsonify({'code': 1, 'msg': '分析失败', 'data': None}), 500
+
+            # 在后台线程中执行分析，立即返回 task_id
+            thread = threading.Thread(
+                target=_run_analyze_in_background,
+                args=(task_id, video_path_abs, commentary_service, db_manager),
+                daemon=True
+            )
+            thread.start()
+
+            return jsonify({
+                'code': 0,
+                'msg': '分析任务已提交，请轮询获取结果',
+                'data': {'task_id': task_id, 'async': True}
+            })
             
         except Exception as e:
             logger.error(f'❌ 视频分析失败: {e}')
             return jsonify({'code': 1, 'msg': str(e), 'data': None}), 500
     
+    def _run_generate_script_in_background(task_id, vision_results, config, commentary_svc, db_mgr):
+        """在后台线程中执行文案生成"""
+        try:
+            db_mgr.update_task_status(task_id, 'running')
+            script = commentary_svc._generate_script(vision_results, config, task_id)
+
+            if script:
+                try:
+                    safe_script = json.loads(json.dumps(script, ensure_ascii=False, default=lambda o: None))
+                except Exception:
+                    safe_script = script
+                _async_task_results[task_id] = safe_script
+                db_mgr.update_task_status(task_id, 'completed', output_data=safe_script)
+                logger.info(f'✅ 异步文案生成完成: task_id={task_id}')
+            else:
+                _async_task_results[task_id] = {'__error': '生成失败'}
+                db_mgr.update_task_status(task_id, 'failed', error_message='文案生成返回空结果')
+                logger.error(f'❌ 异步文案生成失败: task_id={task_id}')
+        except Exception as e:
+            logger.error(f'❌ 异步文案生成异常: {e}')
+            _async_task_results[task_id] = {'__error': str(e)}
+            try:
+                db_mgr.update_task_status(task_id, 'failed', error_message=str(e))
+            except Exception:
+                pass
+
     @app.route('/api/commentary/generate-script', methods=['POST'])
     def generate_script():
-        """生成解说文案"""
+        """生成解说文案（异步）"""
         try:
             data = request.get_json()
             vision_results = data.get('vision_results')
@@ -102,7 +159,7 @@ def register_commentary_routes_enhanced(app, db_manager, task_service, socketio)
             if not vision_results:
                 return jsonify({'code': 1, 'msg': '缺少视频分析结果', 'data': None}), 400
             
-            # 创建临时任务
+            # 创建任务
             task_id = str(uuid.uuid4())
             db_manager.create_task(
                 task_id=task_id,
@@ -110,15 +167,20 @@ def register_commentary_routes_enhanced(app, db_manager, task_service, socketio)
                 project_id='temp',
                 input_data={'description': '文案生成'}
             )
-            task = {'id': task_id}
-            
-            # 生成文案
-            script = commentary_service._generate_script(vision_results, config, task['id'])
-            
-            if script:
-                return jsonify({'code': 0, 'msg': '生成完成', 'data': script})
-            else:
-                return jsonify({'code': 1, 'msg': '生成失败', 'data': None}), 500
+
+            # 在后台线程中执行生成，立即返回 task_id
+            thread = threading.Thread(
+                target=_run_generate_script_in_background,
+                args=(task_id, vision_results, config, commentary_service, db_manager),
+                daemon=True
+            )
+            thread.start()
+
+            return jsonify({
+                'code': 0,
+                'msg': '文案生成任务已提交，请轮询获取结果',
+                'data': {'task_id': task_id, 'async': True}
+            })
             
         except Exception as e:
             logger.error(f'❌ 文案生成失败: {e}')
@@ -228,4 +290,51 @@ def register_commentary_routes_enhanced(app, db_manager, task_service, socketio)
             logger.error(f'❌ 获取结果失败: {e}')
             return jsonify({'code': 1, 'msg': str(e), 'data': None}), 500
     
+    @app.route('/api/commentary/task-result/<task_id>', methods=['GET'])
+    def get_commentary_task_result(task_id):
+        """轮询获取异步任务结果"""
+        try:
+            # 优先从内存缓存获取
+            if task_id in _async_task_results:
+                result = _async_task_results[task_id]
+                # 检查是否为错误结果
+                if isinstance(result, dict) and '__error' in result:
+                    error_msg = result['__error']
+                    # 清理缓存
+                    del _async_task_results[task_id]
+                    return jsonify({'code': 1, 'msg': error_msg, 'data': None, 'status': 'failed'})
+                # 成功结果 - 清理缓存并返回
+                del _async_task_results[task_id]
+                return jsonify({'code': 0, 'msg': '完成', 'data': result, 'status': 'completed'})
+
+            # 内存中没有，查询数据库任务状态
+            task = db_manager.get_task(task_id)
+            if not task:
+                return jsonify({'code': 1, 'msg': '任务不存在', 'data': None, 'status': 'not_found'}), 404
+
+            task_status = task.get('status', 'pending')
+            if task_status in ('pending', 'running'):
+                progress = task.get('progress', 0)
+                return jsonify({
+                    'code': 0,
+                    'msg': '任务处理中',
+                    'data': {'progress': progress},
+                    'status': 'running'
+                })
+            elif task_status == 'completed':
+                output_data = task.get('output_data')
+                if isinstance(output_data, str):
+                    try:
+                        output_data = json.loads(output_data)
+                    except Exception:
+                        pass
+                return jsonify({'code': 0, 'msg': '完成', 'data': output_data, 'status': 'completed'})
+            else:
+                error_msg = task.get('error_message', '任务失败')
+                return jsonify({'code': 1, 'msg': error_msg, 'data': None, 'status': 'failed'})
+
+        except Exception as e:
+            logger.error(f'❌ 获取任务结果失败: {e}')
+            return jsonify({'code': 1, 'msg': str(e), 'data': None, 'status': 'error'}), 500
+
     return commentary_service

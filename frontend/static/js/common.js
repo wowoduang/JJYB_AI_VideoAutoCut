@@ -236,6 +236,36 @@ class API {
         
         try {
             const response = await fetch(url, config);
+
+            // 先检查HTTP状态码，处理非200响应
+            if (!response.ok) {
+                // 尝试解析JSON错误体；如果返回的是HTML（如代理504页面），则构造友好错误
+                let errorData;
+                const contentType = response.headers.get('content-type') || '';
+                if (contentType.includes('application/json')) {
+                    try {
+                        errorData = await response.json();
+                    } catch (_) {
+                        errorData = null;
+                    }
+                }
+                if (errorData) {
+                    // 后端返回了JSON格式的错误
+                    return errorData;
+                }
+                // 非JSON响应（如代理返回的HTML 504页面）
+                const statusMessages = {
+                    504: '请求超时，服务器处理时间过长。请稍后重试或检查网络/代理超时设置。',
+                    502: '网关错误，后端服务可能未启动或异常。',
+                    503: '服务暂时不可用，请稍后重试。',
+                    500: '服务器内部错误，请查看后端日志。',
+                    413: '请求体过大，请压缩文件后重试。',
+                    408: '请求超时，请稍后重试。'
+                };
+                const friendlyMsg = statusMessages[response.status] || `服务器错误 (${response.status})`;
+                return { code: -1, msg: friendlyMsg, data: null };
+            }
+
             const data = await response.json();
             return data;
         } catch (error) {
