@@ -3,6 +3,30 @@
  * 提供所有页面共用的功能
  */
 
+// 修复：当页面通过含凭据的 URL（如反向代理隧道 user:pass@host）访问时，
+// 浏览器 Fetch API 会拒绝携带凭据的请求 URL。
+// 用 window.location.origin（不含凭据）重新构造绝对 URL 来规避此限制。
+(function () {
+    const _origFetch = window.fetch;
+    window.fetch = function (input, init) {
+        if (typeof input === 'string' && input.startsWith('/')) {
+            input = new URL(input, window.location.origin).href;
+        }
+        return _origFetch.call(this, input, init);
+    };
+})();
+
+// 同样修复 XMLHttpRequest.open，供文件上传等场景使用
+(function () {
+    const _origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+        if (typeof url === 'string' && url.startsWith('/')) {
+            url = new URL(url, window.location.origin).href;
+        }
+        return _origOpen.apply(this, [method, url, ...Array.prototype.slice.call(arguments, 2)]);
+    };
+})();
+
 // 全局配置
 const APP_CONFIG = {
     apiBase: '/api',

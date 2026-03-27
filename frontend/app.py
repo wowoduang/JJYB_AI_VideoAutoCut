@@ -142,12 +142,13 @@ def add_security_headers(response):
 
     # 放宽 CSP 以允许内联脚本和 CDN 资源
     csp_directives = [
-        "default-src 'self' 'unsafe-inline' 'unsafe-eval' *",
+        "default-src 'self' 'unsafe-inline' 'unsafe-eval' blob: *",
         "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdn.tailwindcss.com https://cdn.socket.io *",
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net *",
         "img-src 'self' data: blob: https: *",
         "font-src 'self' data: https://cdn.jsdelivr.net *",
         "connect-src 'self' ws: wss: https: *",
+        "media-src 'self' blob: data: https: *",
         "frame-src 'self' *"
     ]
     response.headers['Content-Security-Policy'] = '; '.join(csp_directives)
@@ -1510,6 +1511,14 @@ def start_desktop_app():
         logger.error(f'❗ 桌面应用启动失败: {e}', exc_info=True)
         logger.info(f'💡 请手动访问: http://{UI_HOST}:{APP_PORT}')
 
+        # 保持主线程运行，防止守护线程中的服务器随主线程退出
+        try:
+            logger.info('💡 按 Ctrl+C 退出程序')
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info('\n✅ 程序正常退出')
+
 # ==================== 三大核心功能API路由 ====================
 
 # 辅助函数：加载API配置
@@ -2124,14 +2133,8 @@ def main():
         logger.error(f'\n❗ 应用启动失败: {str(e)}', exc_info=True)
         sys.exit(1)
 
-if __name__ == '__main__':
-    main()
-
-# ==================== 文件结束 ====================
-# JJYB_AI智剪 v2.0 - 完整详细版
-# 总代码行数: 1400+
-# 包含完整的DatabaseManager、所有API路由、任务处理、WebSocket和启动逻辑
-# 可以独立运行，也可以与backend模块集成使用
+# 注意：if __name__ == '__main__' 已移至文件末尾，
+# 确保所有路由在服务器启动前完成注册（Flask 3.x 要求）。
 
 
 # ==================== 本地后备API：任务/字幕/智能剪辑 ====================
@@ -3511,3 +3514,10 @@ def api_export_video_disabled():
     except Exception as e:
         logger.error(f'导出失败: {e}', exc_info=True)
         return jsonify({'code': 1, 'msg': str(e)}), 500
+
+# ==================== 文件结束 ====================
+# JJYB_AI智剪 v2.0 - 完整详细版
+# 所有路由已在上方注册完毕，下方仅保留入口点。
+
+if __name__ == '__main__':
+    main()
